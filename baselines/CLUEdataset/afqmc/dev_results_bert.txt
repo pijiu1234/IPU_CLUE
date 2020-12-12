@@ -1,0 +1,12 @@
+***** Eval results /home/xihuaiwen/chinese/CLUE/baselines/models/bert/afqmc_output_12l/BERT_pretraining_v1.4.0_2020-12-12-02:47:50/ckpt/model.ckpt-0 *****
+accuracy = 0.38761905
+global_step = 350
+loss = 0.84477466
+***** Eval results /home/xihuaiwen/chinese/CLUE/baselines/models/bert/afqmc_output_12l/BERT_pretraining_v1.4.0_2020-12-12-02:47:50/ckpt/model.ckpt-5000 *****
+accuracy = 0.68714285
+global_step = 5350
+loss = 0.62421685
+***** Eval results /home/xihuaiwen/chinese/CLUE/baselines/models/bert/afqmc_output_12l/BERT_pretraining_v1.4.0_2020-12-12-02:47:50/ckpt/model.ckpt-8580 *****
+accuracy = 0.68714285
+global_step = 8930
+loss = 0.6401824
