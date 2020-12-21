@@ -55,14 +55,14 @@ flags = tf.flags
 FLAGS = flags.FLAGS
 
 opts = {}
-opts['device_mapping'] = [0,1,2,3,4,0]
-opts['pipeline_stages'] = [
-     ["emb"],
-     ["pos"],
-     ["hid","hid"],
-     ["hid","hid"],
-     ["hid","hid"],
-     ["cls_loss"]]
+# opts['device_mapping'] = [0,1,2,3,4,0]
+# opts['pipeline_stages'] = [
+#      ["emb"],
+#      ["pos"],
+#      ["hid","hid"],
+#      ["hid","hid"],
+#      ["hid","hid"],
+#      ["cls_loss"]]
 
 # Required parameters
 flags.DEFINE_string(
@@ -96,7 +96,7 @@ flags.DEFINE_bool(
     "models and False for cased models.")
 
 flags.DEFINE_integer(
-    "max_seq_length", 256,
+    "max_seq_length", 128,
     "The maximum total input sequence length after WordPiece tokenization. "
     "Sequences longer than this will be truncated, and sequences shorter "
     "than this will be padded.")
@@ -157,7 +157,7 @@ flags.DEFINE_integer(
     "num_tpu_cores", 8,
     "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
-flags.DEFINE_integer("pipeline_depth", 12,"How often to print loss")
+flags.DEFINE_integer("pipeline_depth", 24,"How often to print loss")
 flags.DEFINE_integer("vocab_size", 52000, "Vocaburary sizes")
 flags.DEFINE_integer("hidden_size", 768, "Layer hidden sizes")
 flags.DEFINE_integer("num_hidden_layers", 6, "The number of hidden layers")
@@ -185,7 +185,7 @@ flags.DEFINE_float("available_memory_proportion", 0, "Proportion of memory which
 flags.DEFINE_integer("select_ipu", -1, "Select determind IPU to run")
 flags.DEFINE_bool("stochastic_rounding", False, "Use hardware ramdom data")
 flags.DEFINE_integer("parallell_io_threads", 2, "Number of cpu threads used to do data prefetch.")
-flags.DEFINE_integer("loss_scaling", 2, "The scale of loss")
+flags.DEFINE_integer("loss_scaling", 1, "The scale of loss")
 flags.DEFINE_float("momentum", 0.98, "The coef of momentum optimizer")
 flags.DEFINE_float("weight_decay", 0.0003, "The decay coef of weight")
 flags.DEFINE_integer("decay_step", 10000, "Decay steps")
@@ -202,12 +202,24 @@ flags.DEFINE_integer("matmul_serialize_factor", 4,"How often to print loss")
 flags.DEFINE_string("recomputation_mode", "RecomputeAndBackpropagateInterleaved", "Pipeline schedule")
 flags.DEFINE_string("reduction_type", "mean", "Pipeline schedule")
 flags.DEFINE_float("beta1", 0.9, "The decay coef of weight")
-flags.DEFINE_float("beta2", 0.99, "The decay coef of weight")
-flags.DEFINE_float("epsilon", 0.001, "The decay coef of weight")
+flags.DEFINE_float("beta2", 0.999, "The decay coef of weight")
+flags.DEFINE_float("epsilon", 0.0001, "The decay coef of weight")
+flags.DEFINE_string("device_mapping", "", "Devivce mapping schedule")
+flags.DEFINE_string("pipeline_stages", "", "Pipeline stages schedule")
 
 #debug
 flags.DEFINE_string("input_files", "", "Small input data sizes for debug")
 
+#update parameters from json config file
+with tf.gfile.GFile(FLAGS.bert_config_file, "r") as reader:
+  text = reader.read()
+  json_dict = json.loads(text)
+  for key, value in sorted(FLAGS.__flags.items()):
+      if key in json_dict.keys():
+        value.value = json_dict[key]
+opts['device_mapping'] = [int(i) for i in FLAGS.device_mapping.split(",")]
+stage_list = lambda x:[i for i in x.split(",")]
+opts['pipeline_stages'] = [stage_list(j) for j in FLAGS.pipeline_stages.split(";")]
 
 def update_bert_config():
   config = bert_ipu.BertConfig(vocab_size=None)
@@ -1030,7 +1042,7 @@ def main(_):
     raise ValueError(
         "At least one of `do_train`, `do_eval` or `do_predict' must be True.")
 
-  bert_config = bert_ipu.BertConfig.from_json_file(FLAGS.bert_config_file)
+  # bert_config = bert_ipu.BertConfig.from_json_file(FLAGS.bert_config_file)
   bert_config = update_bert_config()
   bert_config.dtype = tf.float16 if FLAGS.use_fp16 else tf.float32
   set_defaults()

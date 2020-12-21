@@ -65,7 +65,7 @@ if [ $# == 0 ]; then
       --task_name=$TASK_NAME \
       --do_train=true \
       --do_eval=true \
-      --init_checkpoint=$BERT_BASE_DIR/gc_ckpt_ipu/gc_ckpt/best-35879 \
+      --init_checkpoint=$BERT_BASE_DIR/gc_ckpt_ipu/gc_ckpt/ckpt-198000 \
       --data_dir=$GLUE_DATA_DIR/$TASK_NAME \
       --vocab_file=$BERT_BASE_DIR/vocab.txt \
       --bert_config_file=$BERT_BASE_DIR/bert_config.json \
@@ -73,7 +73,7 @@ if [ $# == 0 ]; then
       --train_batch_size=1 \
       --learning_rate=3e-5 \
       --num_train_epochs=3.0 \
-      --output_dir=$CURRENT_DIR/${TASK_NAME}_output_12l/
+      --output_dir=$CURRENT_DIR/${TASK_NAME}_output_12l_ipu/
 elif [ $1 == "predict" ]; then
     echo "Start predict..."
     python run_classifier.py \

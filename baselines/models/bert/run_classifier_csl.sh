@@ -68,9 +68,9 @@ if [ $# == 0 ]; then
       --data_dir=$GLUE_DATA_DIR/$TASK_NAME \
       --vocab_file=$BERT_BASE_DIR/vocab.txt \
       --bert_config_file=$BERT_BASE_DIR/bert_config.json \
-      --init_checkpoint=$BERT_BASE_DIR/bert_model.ckpt \
+      --init_checkpoint=$BERT_BASE_DIR/gc_ckpt_ipu/gc_ckpt/ckpt-198000 \
       --max_seq_length=128 \
-      --train_batch_size=32 \
+      --train_batch_size=1 \
       --learning_rate=2e-5 \
       --num_train_epochs=3.0 \
       --output_dir=$CURRENT_DIR/${TASK_NAME}_output/

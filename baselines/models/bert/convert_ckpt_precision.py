@@ -251,7 +251,8 @@ def print_ckpt_tensor_name(checkpoint_path):
     for key in var_dict:
         num_tensor = num_tensor + 1
         print(key+" "+str(model_reader.get_tensor(key).shape))
-        if key == 'bert/encoder/layer_2/attention/self/qkv_weight':
+        if key == 'bert/encoder/layer_2/attention/self/qkv_weight'\
+        or key == 'bert/embeddings/word_embeddings':
             print(model_reader.get_tensor(key))
     print(num_tensor)
 
@@ -265,11 +266,12 @@ def filter_optimizer(variables_name, optimizer_names):
 def convert_google_ckpt_to_gc(ckpt_file,
                               output_dir=None,
                               num_embed_split=1,
-                              vocab_size=30400,
+                              vocab_size=52000,
                               use_attention_bias=False,
                               use_qkv_bias=False,
                               use_cls_layer=False,
-                              dtype=tf.float16):
+                              dtype=tf.float16,
+                              label_num=1):
     """ Convert Google original checkpoint to GC bert checkpoint
     there are several difference between our GC bert and origin google bert:
         1. gc_bert do not have attention_probs_dropout_prob
@@ -383,10 +385,12 @@ def convert_google_ckpt_to_gc(ckpt_file,
         
 
         #loss
-        loss_weight = tf.get_variable(shape=(2,768),dtype=tf.float16,	
+        loss_weight = tf.get_variable(shape=(label_num,768),dtype=tf.float16,
+                                initializer=tf.truncated_normal_initializer(stddev=0.02),	
                                 name="output_weights")
         saved_variables.append(loss_weight)
-        loss_bias = tf.get_variable(shape=(2,),dtype=tf.float16,	
+        loss_bias = tf.get_variable(shape=(label_num,),dtype=tf.float16,
+                                initializer=tf.zeros_initializer(),		
                                 name="output_bias")
         saved_variables.append(loss_bias)
 
@@ -396,6 +400,18 @@ def convert_google_ckpt_to_gc(ckpt_file,
         saver.save(sess, output_file)	
         print("Save to :" + output_file)
 
+def get_embeding(path="/home/xihuaiwen/chinese/CLUE_B/baselines/models/bert/prev_trained_model/chinese_L-12_H-768_A-12/gc_ckpt/model.ckpt-525000"):
+    graph = tf.Graph()
+    reader = pywrap_tensorflow.NewCheckpointReader(path)
+    var_to_shape_map = reader.get_variable_to_shape_map()
+    with graph.as_default():
+        sess = tf.Session()
+        for key in var_to_shape_map:
+            if "adam" not in key and "Momentum" not in key:
+                if 'word_embeddings' in key:
+                    val = reader.get_tensor(key)
+    return val
+
 def convert_ipu_ckpt_to_gc(ckpt_file,
                               output_dir=None,
                               num_embed_split=1,
@@ -403,7 +419,8 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
                               use_attention_bias=False,
                               use_qkv_bias=False,
                               use_cls_layer=False,
-                              dtype=tf.float16):
+                              dtype=tf.float16,
+                              label_num=1):
     """ Convert Google original checkpoint to GC bert checkpoint
     there are several difference between our GC bert and origin google bert:
         1. gc_bert do not have attention_probs_dropout_prob
@@ -453,7 +470,7 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
                 continue
             tensor_value = tf.cast(reader.get_tensor(tensor_name), dtype=dtype)
             if "word_embeddings" in tensor_name:
-                emb_list.append(tensor_value) 
+                emb_list.append(tensor_name) 
                 # split word_embeddings when num_split>1
                 '''
                 word_embeddings = tensor_value[:vocab_size, :]
@@ -494,12 +511,16 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
                 saved_variables.append(others_var)	
 
         print("Start to combine query,key,value layers to qkv layer...")	
-        print("Start to combine word embedding ...")	
-        import pdb
-        pdb.set_trace()
-        word_embedding = tf.concat(emb_list, axis=0)
-        word = tf.Variable(word_embedding, shape=(52000,768),	
-                            name="bert/embeddings/word_embeddings")	
+        print("Start to combine word embedding ...")
+        word_embeddings = np.sort(emb_list)
+        embeding_vals = [reader.get_tensor(key) for key in word_embeddings]
+        unit_embedding = np.vstack(embeding_vals)
+        
+
+        # unit_embedding = get_embeding()
+        # word_embedding = tf.concat(emb_list, axis=0)
+        word = tf.Variable(unit_embedding, shape=unit_embedding.shape,	
+                            name="bert/embeddings/word_embeddings",dtype=tf.float16)	
         saved_variables.append(word)
         '''
         for i in range(num_hidden_layers+1):
@@ -529,10 +550,12 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
         '''
 
         #loss
-        loss_weight = tf.get_variable(shape=(2,768),dtype=tf.float16,	
+        loss_weight = tf.get_variable(shape=(label_num,768),dtype=tf.float16,	
+                                initializer=tf.truncated_normal_initializer(stddev=0.02),
                                 name="output_weights")
         saved_variables.append(loss_weight)
-        loss_bias = tf.get_variable(shape=(2,),dtype=tf.float16,	
+        loss_bias = tf.get_variable(shape=(label_num,),dtype=tf.float16,
+                                initializer=tf.zeros_initializer(),	
                                 name="output_bias")
         saved_variables.append(loss_bias)
 
@@ -541,6 +564,7 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
         output_file = os.path.join(output_dir, ckpt_name)
         saver.save(sess, output_file)	
         print("Save to :" + output_file)
+
 
 if __name__=='__main__':
     if args.convert:
@@ -552,4 +576,4 @@ if __name__=='__main__':
     if args.rename:
         rename_ckpt_tensor_name(args.ckpt_dir)
     if args.googletogc:
-        convert_ipu_ckpt_to_gc(args.ckpt_dir,use_attention_bias=True,use_qkv_bias=True)
+        convert_ipu_ckpt_to_gc(args.ckpt_dir,use_attention_bias=True,use_qkv_bias=True,label_num=3)
