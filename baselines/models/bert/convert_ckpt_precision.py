@@ -26,11 +26,17 @@ parser.add_argument('--rename', action="store_true",
                     help='rename action')
 parser.add_argument('--googletogc', action="store_true",
                     help='rename action')
+parser.add_argument('--compare', action="store_true",
+                    help='rename action')
+parser.add_argument('--ckpt_dir_b', type=str, default='',
+                    help='path to convert checkpoint file directory (default:'')')
+parser.add_argument('--gctogoogle', action="store_true",
+                    help='rename action')
 
 
 args = parser.parse_args()
 
-def convert_ckpt_to_fp(checkpoint_path,data_type=np.float16):
+def convert_ckpt_to_fp(checkpoint_path,data_type=np.float32):
     """Convert checkpoint to fp weights and return saver.
     Args:
         init_checkpoint: Path to checkpoint file.
@@ -51,7 +57,7 @@ def convert_ckpt_to_fp(checkpoint_path,data_type=np.float16):
         return
     
     curent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))+'/'
-    out_dir = curent_dir +  checkpoint_path + "-F16"+'/'
+    out_dir = curent_dir +  checkpoint_path + "-F32"+'/'
     if not os.path.exists(out_dir):
         os.mkdir(out_dir) 
 
@@ -68,7 +74,7 @@ def convert_ckpt_to_fp(checkpoint_path,data_type=np.float16):
             val_f[key.strip(":0")] = tf.Variable(reader.get_tensor(key),name=key)
             continue
         if 'word_embeddings' in key:
-            val_f[key.strip(":0")] = tf.Variable(reader.get_tensor(key)[:30400,:],name=key)
+            val_f[key.strip(":0")] = tf.Variable(reader.get_tensor(key).astype(data_type),name=key)
             continue
         val_f[key.strip(":0")] = tf.Variable(reader.get_tensor(key).astype(data_type),name=key)
         if args.test:
@@ -233,7 +239,8 @@ def rename_ckpt_tensor_name(checkpoint_path):
     print("Save to path:"+out_dir)     
 
 def print_ckpt_tensor_name(checkpoint_path):
-    # pdb.set_trace()
+    import pdb
+    pdb.set_trace()
     num_tensor = 0
     ckpt = 'ckpt'
     checkpoint_name = None
@@ -252,7 +259,8 @@ def print_ckpt_tensor_name(checkpoint_path):
         num_tensor = num_tensor + 1
         print(key+" "+str(model_reader.get_tensor(key).shape))
         if key == 'bert/encoder/layer_2/attention/self/qkv_weight'\
-        or key == 'bert/embeddings/word_embeddings':
+        or key == 'bert/embeddings/word_embeddings'\
+        or key == 'bert/pooler/dense/kernel':
             print(model_reader.get_tensor(key))
     print(num_tensor)
 
@@ -368,7 +376,8 @@ def convert_google_ckpt_to_gc(ckpt_file,
                 weight_name = layer_name + f"/{name}/kernel"
                 bias_name = layer_name + f"/{name}/bias"
                 qkv_weight.append(layer_tensors[weight_name])
-                qkv_bias.append(layer_tensors[bias_name])
+                if use_qkv_bias:
+                    qkv_bias.append(layer_tensors[bias_name])
 
             qkv_weight = tf.concat(qkv_weight, axis=1)
             qkv = tf.Variable(qkv_weight, shape=qkv_weight.shape,	
@@ -565,6 +574,135 @@ def convert_ipu_ckpt_to_gc(ckpt_file,
         saver.save(sess, output_file)	
         print("Save to :" + output_file)
 
+def convert_compare_ipu_gpu(ckpt_a, ckpt_b):
+    graph = tf.Graph()
+    reader_a = pywrap_tensorflow.NewCheckpointReader(ckpt_a)
+    reader_b = pywrap_tensorflow.NewCheckpointReader(ckpt_b)
+    var_to_shape_map_a = reader_a.get_variable_to_shape_map()
+    var_to_shape_map_b = reader_b.get_variable_to_shape_map()
+    import pdb
+    pdb.set_trace()
+    with graph.as_default():
+        sess = tf.Session()
+        for tensor_name in var_to_shape_map_a:
+            tensor_value_a = reader_a.get_tensor(tensor_name)
+            tensor_value_b = reader_b.get_tensor(tensor_name)
+            if tensor_value_a != tensor_value_b:
+                print(tensor_name)
+    
+    print("finish compare!")
+
+
+def convert_gc_ckpt_to_google(ckpt_file,
+                              output_dir=None,
+                              include_qkv_bias=False,
+                              dtype=tf.float32):
+    """ Convert GC bert checkpoint to Google original checkpoint
+        1. combine `word_embeddings` if splitted
+        2. rename scope `bert/encoder/layer_x/attention/projection/` to `bert/encoder/layer_x/attention/output/`
+        3. add back attention_projection_bias.
+        4. split `qkv_weight` to query,key,value, and add relative bias.
+        5. rename `GroupNorm` to `LayerNorm`.
+        6. add back dense layer before mlm loss.
+    Args:
+        ckpt_file: str, Google checkpoint.
+        output_dir: str, Path to save converted GC checkpoint.
+        include_qkv_bias: bool, are there bias weights in attention layer.
+        dtype: tf.float32 or tf.float16, type of tensor in output ckpt file. Only will be used when load origin google checkpoint
+
+    Returns:
+        None
+    """
+    graph = tf.Graph()
+    dir_name, ckpt_name = os.path.split(os.path.abspath(ckpt_file))
+    if not output_dir:
+        output_dir = os.path.join(dir_name, "google_ckpt")
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    reader = pywrap_tensorflow.NewCheckpointReader(ckpt_file)
+    var_to_shape_map = reader.get_variable_to_shape_map()
+    with graph.as_default():
+        sess = tf.Session()
+        num_hidden_layers = 0
+        optimizer_names = ["adam", "Momentum", "lamb"]  # optimizer weights
+        word_embeddings = []
+        new_variables = []
+        keep_vardiables = []
+        for tensor_name in var_to_shape_map:
+            # logger.info(f"Load {tensor_name}......")
+            # Filter the optimizer variables
+            if filter_optimizer(tensor_name, optimizer_names):
+                continue
+
+            tensor_value = tf.cast(reader.get_tensor(tensor_name), dtype=dtype)
+
+            if tensor_name == 'bert/encoder/layer_0/intermediate/dense/kernel' or tensor_name == 'bert/pooler/dense/kernel':
+                print(tensor_name)
+                print(tensor_value)
+            # logger.info(f"Shape is {tensor_value.shape}")
+            if "word_embeddings" in tensor_name:
+                word_embeddings.append(tensor_name)
+            elif "attention" in tensor_name:
+                layer_idx = int(tensor_name.split("/")[2].split("_")[-1])
+                num_hidden_layers = max(layer_idx, num_hidden_layers)
+                # split query, key, value.
+                if "qkv_weight" in tensor_name:
+                    hidden_size = tensor_value.shape[1]//3
+                    query = tensor_value[:, :hidden_size]
+                    key = tensor_value[:, hidden_size:2*hidden_size]
+                    value = tensor_value[:, 2*hidden_size:]
+
+                    qw = tf.Variable(query, name=tensor_name.replace("qkv_weight", "query/kernel"))
+                    kw = tf.Variable(key, name=tensor_name.replace("qkv_weight", "key/kernel"))
+                    vw = tf.Variable(value, name=tensor_name.replace("qkv_weight", "value/kernel"))
+                    new_variables.extend([qw, kw, vw])
+                elif "qkv_bias" in tensor_name and include_qkv_bias:
+                    hidden_size = tensor_value.shape[0]//3
+                    query_bias = tensor_value[:hidden_size]
+                    key_bias = tensor_value[hidden_size:2*hidden_size]
+                    value_bias = tensor_value[2*hidden_size:]
+                    qb = tf.Variable(query_bias, name=tensor_name.replace("qkv_bias", "query/bias"))
+                    kb = tf.Variable(key_bias, name=tensor_name.replace("qkv_bias", "key/bias"))
+                    vb = tf.Variable(value_bias, name=tensor_name.replace("qkv_bias", "value/bias"))
+                    new_variables.extend([qb, kb, vb])
+                # rename projection to output
+                elif "projection" in tensor_name:
+                    # logger.debug(f"Rename projection......")
+                    new_name = tensor_name.replace("projection", "output")
+                    if "GroupNorm" in tensor_name:
+                        # logger.debug(f"Rename GroupNorm in attention ......")
+                        new_name = new_name.replace("GroupNorm", "LayerNorm")
+
+                    proj = tf.Variable(tensor_value, name=new_name)
+                    new_variables.append(proj)
+            # rename other GroupNorm
+            elif "GroupNorm" in tensor_name:
+                # logger.debug(f"Rename GroupNorm ......")
+                gn = tf.Variable(tensor_value, name=tensor_name.replace("GroupNorm", "LayerNorm"))
+                new_variables.append(gn)
+            else:
+                var = tf.get_variable(tensor_name, shape=tensor_value.shape, dtype=dtype)
+                # var = tf.Variable(tensor_value, name=tensor_name)
+                keep_vardiables.append(var)
+
+        # Combine splitted embeddings
+        word_embeddings = np.sort(word_embeddings)
+        embeddings_vals = [reader.get_tensor(k) for k in word_embeddings]
+        unit_embeddings = np.vstack(embeddings_vals)
+        # logger.debug(f"Concated word_embeddings shape: {unit_embeddings.shape}")
+        we = tf.Variable(
+            unit_embeddings,
+            dtype=dtype,
+            shape=unit_embeddings.shape, 
+            name="bert/embeddings/word_embeddings")
+        new_variables.append(we)
+        saved_variables = new_variables + keep_vardiables
+        # logger.info("Finish concat word embeddings.")
+        sess.run(tf.compat.v1.global_variables_initializer())
+        saver = tf.compat.v1.train.Saver()
+        output_file = os.path.join(output_dir, ckpt_name)
+        saver.save(sess, output_file)
+        # logger.info("Save to :" + output_file)
 
 if __name__=='__main__':
     if args.convert:
@@ -576,4 +714,8 @@ if __name__=='__main__':
     if args.rename:
         rename_ckpt_tensor_name(args.ckpt_dir)
     if args.googletogc:
-        convert_ipu_ckpt_to_gc(args.ckpt_dir,use_attention_bias=True,use_qkv_bias=True,label_num=3)
+        convert_ipu_ckpt_to_gc(args.ckpt_dir,use_attention_bias=True,use_qkv_bias=True,label_num=2)
+    if args.compare:
+        convert_compare_ipu_gpu(args.ckpt_dir,args.ckpt_dir_b)
+    if args.gctogoogle:
+        convert_gc_ckpt_to_google(args.ckpt_dir,include_qkv_bias=True)
